@@ -7,7 +7,7 @@ branding:
 
 inputs:
   api-key:
-    description: 'TinyEdge API key. Store it as a repo secret and pass ${{ secrets.TINYEDGE_API_KEY }}.'
+    description: 'TinyEdge API key — store it as a repo secret (e.g. TINYEDGE_API_KEY) and pass that secret to this input.'
     required: true
   baseline:
     description: 'Baseline id to validate against (create one in the console or `tinyedge baseline save`).'
