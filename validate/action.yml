@@ -1,0 +1,102 @@
+name: 'TinyEdge Validate'
+description: 'Benchmark a model on real edge devices and fail the build if it regresses against a baseline.'
+author: 'TinyEdge'
+branding:
+  icon: 'cpu'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'TinyEdge API key. Store it as a repo secret and pass ${{ secrets.TINYEDGE_API_KEY }}.'
+    required: true
+  baseline:
+    description: 'Baseline id to validate against (create one in the console or `tinyedge baseline save`).'
+    required: true
+  model:
+    description: 'Path to the model file to validate (.onnx / .gguf). Omit if using model-id.'
+    required: false
+    default: ''
+  model-id:
+    description: 'Id of an already-uploaded model (instead of uploading a file).'
+    required: false
+    default: ''
+  device:
+    description: 'Device id to run on. Defaults to the baseline''s device.'
+    required: false
+    default: ''
+  runtime:
+    description: 'Runtime override (e.g. onnxruntime, tensorrt, llamacpp).'
+    required: false
+    default: ''
+  precision:
+    description: 'fp32 | fp16 | int8 | int4'
+    required: false
+    default: 'fp32'
+  dataset:
+    description: 'Path to a labeled test set (folder or archive) for on-device accuracy.'
+    required: false
+    default: ''
+  tolerance:
+    description: 'Allowed percent perf drift vs the baseline before failing (default 10).'
+    required: false
+    default: ''
+  max-latency:
+    description: 'Absolute p50 latency budget in ms (hard fail if exceeded).'
+    required: false
+    default: ''
+  max-rss:
+    description: 'Absolute peak-RAM budget in MB.'
+    required: false
+    default: ''
+  min-accuracy:
+    description: 'Absolute minimum top-1 accuracy (0-1).'
+    required: false
+    default: ''
+  api-base:
+    description: 'API base URL (default https://tinyedge.ai/api).'
+    required: false
+    default: ''
+  tinyedge-version:
+    description: 'Pin the tinyedge package version (default: latest, needs >= 0.8.0).'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Install TinyEdge SDK
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.tinyedge-version }}" ]; then
+          pip install "tinyedge==${{ inputs.tinyedge-version }}"
+        else
+          pip install --upgrade "tinyedge>=0.8.0"
+        fi
+
+    - name: Validate on real edge devices
+      shell: bash
+      env:
+        TINYEDGE_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -euo pipefail
+        cmd=(tinyedge)
+        [ -n "${{ inputs.api-base }}" ]     && cmd+=(--api "${{ inputs.api-base }}")
+        cmd+=(validate)
+        [ -n "${{ inputs.model }}" ]        && cmd+=("${{ inputs.model }}")
+        [ -n "${{ inputs.model-id }}" ]     && cmd+=(--model-id "${{ inputs.model-id }}")
+        cmd+=(--baseline "${{ inputs.baseline }}")
+        [ -n "${{ inputs.device }}" ]       && cmd+=(--device "${{ inputs.device }}")
+        [ -n "${{ inputs.runtime }}" ]      && cmd+=(--runtime "${{ inputs.runtime }}")
+        cmd+=(--precision "${{ inputs.precision }}")
+        [ -n "${{ inputs.dataset }}" ]      && cmd+=(--dataset "${{ inputs.dataset }}")
+        [ -n "${{ inputs.tolerance }}" ]    && cmd+=(--tolerance "${{ inputs.tolerance }}")
+        [ -n "${{ inputs.max-latency }}" ]  && cmd+=(--max-latency "${{ inputs.max-latency }}")
+        [ -n "${{ inputs.max-rss }}" ]      && cmd+=(--max-rss "${{ inputs.max-rss }}")
+        [ -n "${{ inputs.min-accuracy }}" ] && cmd+=(--min-accuracy "${{ inputs.min-accuracy }}")
+        echo "+ ${cmd[*]}"
+        "${cmd[@]}"   # exit code 1 on regression → fails the job

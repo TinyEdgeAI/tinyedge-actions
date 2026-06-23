@@ -1,0 +1,118 @@
+name: 'TinyEdge Decide'
+description: 'Sweep a model across the quantization ladder on real edge devices, pick the best deployable variant for a profile, and emit a signed deployment manifest. Fails the build if nothing is deployable.'
+author: 'TinyEdge'
+branding:
+  icon: 'cpu'
+  color: 'blue'
+
+inputs:
+  api-key:
+    description: 'TinyEdge API key. Store it as a repo secret and pass ${{ secrets.TINYEDGE_API_KEY }}.'
+    required: true
+  model:
+    description: 'Model to optimize: a local file path (.onnx / .gguf) or an hf: reference (e.g. hf:meta-llama/Llama-3.2-1B).'
+    required: true
+  device:
+    description: 'Device id to sweep on (e.g. jetson-orin-nano). Use an always-on runner — a sleeping phone will stall the job.'
+    required: true
+  profile:
+    description: 'Deployment profile that defines the objective + constraints: max_quality | cheapest_viable | realtime | battery.'
+    required: false
+    default: 'max_quality'
+  dataset:
+    description: 'Labeled test set / text corpus (folder or archive) — enables on-device quality (perplexity / top-1), which max_quality needs.'
+    required: false
+    default: ''
+  quants:
+    description: 'Override the GGUF quant ladder, e.g. q8_0,q4_k_m (default: the full ladder).'
+    required: false
+    default: ''
+  manifest-path:
+    description: 'Where to write the signed manifest JSON.'
+    required: false
+    default: 'tinyedge-manifest.json'
+  api-base:
+    description: 'API base URL (default https://tinyedge.ai/api).'
+    required: false
+    default: ''
+  tinyedge-version:
+    description: 'Pin the tinyedge package version (default: latest, needs >= 0.9.1 for decide-in-CI).'
+    required: false
+    default: ''
+
+outputs:
+  group-id:
+    description: 'The sweep group id (inspect it at the sweep URL).'
+    value: ${{ steps.decide.outputs.group-id }}
+  verdict:
+    description: 'ok when a deployable variant was found, otherwise the reason the build failed.'
+    value: ${{ steps.decide.outputs.verdict }}
+  manifest-path:
+    description: 'Path to the written signed manifest (only present when verdict == ok).'
+    value: ${{ steps.decide.outputs.manifest-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Install TinyEdge SDK
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.tinyedge-version }}" ]; then
+          pip install "tinyedge[hf]==${{ inputs.tinyedge-version }}"
+        else
+          pip install --upgrade "tinyedge[hf]>=0.9.1"
+        fi
+
+    - name: Sweep the quant ladder on real devices
+      id: sweep
+      shell: bash
+      env:
+        TINYEDGE_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -uo pipefail
+        cmd=(tinyedge)
+        [ -n "${{ inputs.api-base }}" ] && cmd+=(--api "${{ inputs.api-base }}")
+        cmd+=(optimize "${{ inputs.model }}" --device "${{ inputs.device }}")
+        [ -n "${{ inputs.dataset }}" ] && cmd+=(--dataset "${{ inputs.dataset }}")
+        [ -n "${{ inputs.quants }}" ]  && cmd+=(--quants "${{ inputs.quants }}")
+        cmd+=(--json)
+        echo "+ ${cmd[*]}"
+        # stdout is clean JSON (narration goes to stderr); capture the group id.
+        "${cmd[@]}" > sweep.json
+        code=$?
+        cat sweep.json
+        if [ $code -ne 0 ]; then echo "::error::sweep failed"; exit $code; fi
+        gid=$(jq -r '.groupId' sweep.json)
+        echo "group-id=$gid" >> "$GITHUB_OUTPUT"
+
+    - name: Decide the best variant + sign the manifest
+      id: decide
+      shell: bash
+      env:
+        TINYEDGE_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -uo pipefail
+        gid="${{ steps.sweep.outputs.group-id }}"
+        cmd=(tinyedge)
+        [ -n "${{ inputs.api-base }}" ] && cmd+=(--api "${{ inputs.api-base }}")
+        cmd+=(decide "$gid" --profile "${{ inputs.profile }}" --device "${{ inputs.device }}")
+        cmd+=(--out "${{ inputs.manifest-path }}" --json)
+        echo "+ ${cmd[*]}"
+        "${cmd[@]}" > decide.json
+        code=$?
+        cat decide.json
+        verdict=$(jq -r '.recommendation.verdict // "no-decision"' decide.json 2>/dev/null || echo "no-decision")
+        {
+          echo "group-id=$gid"
+          echo "verdict=$verdict"
+          echo "manifest-path=${{ inputs.manifest-path }}"
+        } >> "$GITHUB_OUTPUT"
+        if [ $code -ne 0 ]; then
+          echo "::error::no deployable variant for profile '${{ inputs.profile }}' ($verdict)"
+        fi
+        exit $code   # nonzero verdict fails the build
