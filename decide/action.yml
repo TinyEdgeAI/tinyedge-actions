@@ -36,7 +36,7 @@ inputs:
     required: false
     default: ''
   tinyedge-version:
-    description: 'Pin the tinyedge package version (default: latest, needs >= 0.9.1 for decide-in-CI).'
+    description: 'Pin the tinyedge package version (default: latest, needs >= 0.9.2 for the single-call ship command).'
     required: false
     default: ''
 
@@ -65,48 +65,29 @@ runs:
         if [ -n "${{ inputs.tinyedge-version }}" ]; then
           pip install "tinyedge[hf]==${{ inputs.tinyedge-version }}"
         else
-          pip install --upgrade "tinyedge[hf]>=0.9.1"
+          pip install --upgrade "tinyedge[hf]>=0.9.2"
         fi
 
-    - name: Sweep the quant ladder on real devices
-      id: sweep
-      shell: bash
-      env:
-        TINYEDGE_API_KEY: ${{ inputs.api-key }}
-      run: |
-        set -uo pipefail
-        cmd=(tinyedge)
-        [ -n "${{ inputs.api-base }}" ] && cmd+=(--api "${{ inputs.api-base }}")
-        cmd+=(optimize "${{ inputs.model }}" --device "${{ inputs.device }}")
-        [ -n "${{ inputs.dataset }}" ] && cmd+=(--dataset "${{ inputs.dataset }}")
-        [ -n "${{ inputs.quants }}" ]  && cmd+=(--quants "${{ inputs.quants }}")
-        cmd+=(--json)
-        echo "+ ${cmd[*]}"
-        # stdout is clean JSON (narration goes to stderr); capture the group id.
-        "${cmd[@]}" > sweep.json
-        code=$?
-        cat sweep.json
-        if [ $code -ne 0 ]; then echo "::error::sweep failed"; exit $code; fi
-        gid=$(jq -r '.groupId' sweep.json)
-        echo "group-id=$gid" >> "$GITHUB_OUTPUT"
-
-    - name: Decide the best variant + sign the manifest
+    - name: Decide deployment on a real device
       id: decide
       shell: bash
       env:
         TINYEDGE_API_KEY: ${{ inputs.api-key }}
       run: |
         set -uo pipefail
-        gid="${{ steps.sweep.outputs.group-id }}"
+        # One call: sweep the quant ladder on the device, then decide + sign.
         cmd=(tinyedge)
         [ -n "${{ inputs.api-base }}" ] && cmd+=(--api "${{ inputs.api-base }}")
-        cmd+=(decide "$gid" --profile "${{ inputs.profile }}" --device "${{ inputs.device }}")
+        cmd+=(ship "${{ inputs.model }}" --device "${{ inputs.device }}" --profile "${{ inputs.profile }}")
+        [ -n "${{ inputs.dataset }}" ] && cmd+=(--dataset "${{ inputs.dataset }}")
+        [ -n "${{ inputs.quants }}" ]  && cmd+=(--quants "${{ inputs.quants }}")
         cmd+=(--out "${{ inputs.manifest-path }}" --json)
         echo "+ ${cmd[*]}"
         "${cmd[@]}" > decide.json
         code=$?
         cat decide.json
         verdict=$(jq -r '.recommendation.verdict // "no-decision"' decide.json 2>/dev/null || echo "no-decision")
+        gid=$(jq -r '.groupId // ""' decide.json 2>/dev/null || echo "")
         {
           echo "group-id=$gid"
           echo "verdict=$verdict"
