@@ -86,8 +86,12 @@ runs:
         "${cmd[@]}" > decide.json
         code=$?
         cat decide.json
-        verdict=$(jq -r '.recommendation.verdict // "no-decision"' decide.json 2>/dev/null || echo "no-decision")
-        gid=$(jq -r '.groupId // ""' decide.json 2>/dev/null || echo "")
+        # `ship --json` also prints a human "signed manifest → …" line to stdout, so
+        # decide.json isn't strictly pure JSON. Derive the verdict from the manifest
+        # file (ship writes it only when a variant is deployable) and the group id by
+        # pattern — robust to that trailing line, and never multi-line.
+        if [ -f "${{ inputs.manifest-path }}" ]; then verdict="ok"; else verdict="no-decision"; fi
+        gid=$(grep -oE 'opt-[a-z0-9]+' decide.json | head -n1 || true)
         {
           echo "group-id=$gid"
           echo "verdict=$verdict"
