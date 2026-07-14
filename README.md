@@ -9,7 +9,32 @@ Both actions install the `tinyedge` SDK and call it; you supply a `TINYEDGE_API_
 | **[`decide`](decide)** | sweep the quant ladder on a device, pick the best variant for a deployment profile, emit a **signed manifest** | [decide/](decide/README.md) |
 | **[`validate`](validate)** | benchmark a model vs a saved baseline and **fail the build on regression** | [validate/](validate/README.md) |
 
-## Quick start
+## Quick start — guard a model against regressions
+
+The first run saves a baseline automatically; every run after that compares on
+the same real device and **fails the build on regression**. With
+`only-on-change`, a daily cron only spends device time when the Hugging Face
+repo actually got a new revision:
+
+```yaml
+# .github/workflows/edge-check.yml
+on:
+  schedule: [{ cron: '0 6 * * *' }]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: TinyEdgeAI/tinyedge-actions/validate@v1
+        with:
+          api-key: ${{ secrets.TINYEDGE_API_KEY }}
+          model: "hf:your-org/your-model-GGUF/your-model-Q4_K_M.gguf"
+          device: jetson-orin-nano
+          only-on-change: true
+```
+
+To *choose* what to ship in the first place (sweep the quant ladder, pick the
+best variant, emit a signed manifest), use `decide`:
 
 ```yaml
 # .github/workflows/edge.yml

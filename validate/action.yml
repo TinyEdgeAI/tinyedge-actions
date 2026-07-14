@@ -10,8 +10,13 @@ inputs:
     description: 'TinyEdge API key — store it as a repo secret (e.g. TINYEDGE_API_KEY) and pass that secret to this input.'
     required: true
   baseline:
-    description: 'Baseline id to validate against (create one in the console or `tinyedge baseline save`).'
-    required: true
+    description: 'Baseline id to validate against. Default "auto": match by model+device — the first run saves the baseline, later runs compare against it.'
+    required: false
+    default: 'auto'
+  only-on-change:
+    description: 'hf: models — skip the device run (exit 0) when the repo revision has not changed since the last validation. Makes a scheduled check cost nothing while the model is unchanged.'
+    required: false
+    default: 'false'
   model:
     description: 'Path to the model file to validate (.onnx / .gguf). Omit if using model-id.'
     required: false
@@ -75,7 +80,7 @@ runs:
         if [ -n "${{ inputs.tinyedge-version }}" ]; then
           pip install "tinyedge==${{ inputs.tinyedge-version }}"
         else
-          pip install --upgrade "tinyedge>=0.8.0"
+          pip install --upgrade "tinyedge>=0.10.0"
         fi
 
     - name: Validate on real edge devices
@@ -90,6 +95,7 @@ runs:
         [ -n "${{ inputs.model }}" ]        && cmd+=("${{ inputs.model }}")
         [ -n "${{ inputs.model-id }}" ]     && cmd+=(--model-id "${{ inputs.model-id }}")
         cmd+=(--baseline "${{ inputs.baseline }}")
+        [ "${{ inputs.only-on-change }}" = "true" ] && cmd+=(--only-on-change)
         [ -n "${{ inputs.device }}" ]       && cmd+=(--device "${{ inputs.device }}")
         [ -n "${{ inputs.runtime }}" ]      && cmd+=(--runtime "${{ inputs.runtime }}")
         cmd+=(--precision "${{ inputs.precision }}")
